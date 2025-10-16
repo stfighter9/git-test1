@@ -1,0 +1,9 @@
+[Unit]
+Description=Run MiniBot every 4h on the hour UTC
+
+[Timer]
+OnCalendar=0/4:00:00
+Persistent=true
+
+[Install]
+WantedBy=timers.target

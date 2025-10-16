@@ -1,0 +1,11 @@
+[Unit]
+Description=MiniBot H4 Cycle
+After=network.target
+
+[Service]
+Type=oneshot
+EnvironmentFile=/opt/minibot/.env
+WorkingDirectory=/opt/minibot
+ExecStart=/usr/bin/python -m bot.run_cycle
+StandardOutput=append:/var/log/minibot.log
+StandardError=append:/var/log/minibot.log

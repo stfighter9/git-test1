@@ -1,0 +1,22 @@
+trading:
+  timeframe: "4h"
+  symbol: "BTC/USDT:USDT"
+  leverage: 3
+  risk_pct: 0.01
+  daily_loss_limit_pct: 0.03
+  max_positions: 1
+  atr:
+    window: 14
+    k_sl: 2.5
+    k_tp: 3.5
+  order:
+    ladder_levels: 3
+    timeout_bars: 1
+    post_only: true
+  venue:
+    name: binance
+    testnet: true
+monitoring:
+  telegram:
+    enabled: true
+    chat_id: 123456
