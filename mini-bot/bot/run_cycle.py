@@ -2,18 +2,20 @@
 from __future__ import annotations
 
 import logging
+import time
+from datetime import datetime, timezone
 from pathlib import Path
-from typing import Dict
+from typing import Dict, Optional
 
 from bot.config import TradingConfig, load_config
-from bot.data_ingest import ingest_cycle
+from bot.data_ingest import ingest_cycle, timeframe_to_seconds
 from bot.execution import ExecutionEngine
 from bot.feature_engine import compute_features
 from bot.model_infer import ModelInferer
 from bot.notifier import TelegramNotifier
 from bot.risk_guard import MarketConstraints, RiskGuard
 from bot.signal_policy import make_signal
-from bot.state_store import StateStore
+from bot.state_store import LedgerEntry, StateStore
 
 LOGGER = logging.getLogger(__name__)
 
@@ -28,6 +30,31 @@ def _market_constraints(market: Dict) -> MarketConstraints:
     )
 
 
+def _utc_now_ms() -> int:
+    return int(time.time() * 1000)
+
+
+def _current_utc_day(now_ms: int) -> str:
+    return datetime.fromtimestamp(now_ms / 1000, tz=timezone.utc).date().isoformat()
+
+
+def _ensure_daily_nav_snapshot(store: StateStore, nav: float, now_ms: int) -> float:
+    day_key = _current_utc_day(now_ms)
+    for entry in store.list_ledger_entries(limit=50):
+        if entry.type == "nav_snapshot" and entry.meta == day_key:
+            return float(entry.amount)
+    store.insert_ledger_entry(
+        LedgerEntry(ts=now_ms, type="nav_snapshot", amount=nav, meta=day_key)
+    )
+    return nav
+
+
+def _compute_daily_pnl_pct(open_nav: float, current_nav: float) -> float:
+    if open_nav <= 0:
+        return 0.0
+    return (current_nav - open_nav) / open_nav
+
+
 def run_once(
     ccxt_client,
     store: StateStore,
@@ -35,10 +62,14 @@ def run_once(
     inferer: ModelInferer,
     notifier: TelegramNotifier,
     nav: float,
-    daily_pnl_pct: float,
+    daily_pnl_pct: Optional[float] = None,
 ) -> dict:
     symbol = cfg.symbol
     timeframe = cfg.timeframe
+    now_ms = _utc_now_ms()
+    open_nav = _ensure_daily_nav_snapshot(store, nav, now_ms)
+    if daily_pnl_pct is None:
+        daily_pnl_pct = _compute_daily_pnl_pct(open_nav, nav)
 
     try:
         candles = ingest_cycle(ccxt_client, store, symbol, timeframe)
@@ -63,6 +94,13 @@ def run_once(
     if signal["side"] is None:
         return {"status": "no_signal"}
 
+    if cfg.max_positions <= 1 and store.get_position(symbol):
+        return {"status": "max_position"}
+
+    engine = ExecutionEngine(ccxt_client, store, cfg)
+    ttl_ms = cfg.order.timeout_bars * timeframe_to_seconds(timeframe) * 1000
+    engine.expire_orders(symbol, ttl_ms, now_ms=now_ms)
+
     guard = RiskGuard(cfg)
     market = getattr(ccxt_client, "markets", {}).get(symbol, {})
     constraints = _market_constraints(market)
@@ -70,8 +108,14 @@ def run_once(
     if qty is None:
         return {"status": "risk_blocked"}
 
-    engine = ExecutionEngine(ccxt_client, store, cfg)
-    order_ids = engine.submit_ladder(symbol, signal["side"], last.close, qty)
+    order_ids = engine.submit_ladder(
+        symbol,
+        signal["side"],
+        last.close,
+        qty,
+        stop_px=signal.get("stop_px"),
+        tp_px=signal.get("tp_px"),
+    )
 
     notifier.send_message(
         f"Signal: {signal['side']} qty={qty:.6f} price={last.close:.2f} orders={len(order_ids)}"
@@ -99,7 +143,9 @@ def main() -> dict:
     with StateStore(db_path) as store:
         balance = getattr(client, "fetch_balance", lambda: {"total": {"USDT": 0}})()
         nav = balance.get("total", {}).get("USDT", 0.0)
-        daily_pnl_pct = 0.0
+        now_ms = _utc_now_ms()
+        open_nav = _ensure_daily_nav_snapshot(store, nav, now_ms)
+        daily_pnl_pct = _compute_daily_pnl_pct(open_nav, nav)
         return run_once(client, store, trading_cfg, model, notifier, nav, daily_pnl_pct)
 
 

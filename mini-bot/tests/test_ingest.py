@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import time
 
-from bot.data_ingest import fetch_candles, ingest_cycle
+from bot.data_ingest import fetch_candles, ingest_cycle, timeframe_to_seconds
 from bot.state_store import StateStore
 
 
@@ -43,4 +43,6 @@ def test_ingest_cycle_upserts_latest(temp_db, monkeypatch):
         inserted = ingest_cycle(client, store, "BTC/USDT", "4h")
         assert len(inserted) == 3
         fetched = store.get_last_n_candles("BTC/USDT", "4h", 3)
-        assert [c.ts_close for c in fetched] == [r[0] for r in rows[1:4]]
+        tf_ms = timeframe_to_seconds("4h") * 1000
+        expected = [(r[0] // tf_ms) * tf_ms for r in rows[1:4]]
+        assert [c.ts_close for c in fetched] == expected

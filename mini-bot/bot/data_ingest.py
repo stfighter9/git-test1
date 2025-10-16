@@ -10,7 +10,7 @@ from bot.state_store import Candle, StateStore
 LOGGER = logging.getLogger(__name__)
 
 
-_TIMEFRAME_TO_SECONDS = {
+TIMEFRAME_TO_SECONDS = {
     "1m": 60,
     "3m": 180,
     "5m": 300,
@@ -26,10 +26,17 @@ _TIMEFRAME_TO_SECONDS = {
 }
 
 
-def _timeframe_to_seconds(tf: str) -> int:
-    if tf not in _TIMEFRAME_TO_SECONDS:
+def timeframe_to_seconds(tf: str) -> int:
+    if tf not in TIMEFRAME_TO_SECONDS:
         raise ValueError(f"Unsupported timeframe: {tf}")
-    return _TIMEFRAME_TO_SECONDS[tf]
+    return TIMEFRAME_TO_SECONDS[tf]
+
+
+def _normalize_timestamp(ts_ms: int, tf_seconds: int) -> int:
+    step_ms = tf_seconds * 1000
+    if step_ms <= 0:
+        return ts_ms
+    return (ts_ms // step_ms) * step_ms
 
 
 def _filter_closed_candles(candles: List[List[float]], tf_seconds: int) -> List[List[float]]:
@@ -39,7 +46,7 @@ def _filter_closed_candles(candles: List[List[float]], tf_seconds: int) -> List[
 
 def fetch_candles(ccxt_client, symbol: str, tf: str, n: int = 300) -> List[Candle]:
     """Fetch closed candles from the exchange."""
-    tf_seconds = _timeframe_to_seconds(tf)
+    tf_seconds = timeframe_to_seconds(tf)
     attempt = 0
     last_error: Exception | None = None
     while attempt < 3:
@@ -50,7 +57,7 @@ def fetch_candles(ccxt_client, symbol: str, tf: str, n: int = 300) -> List[Candl
                 Candle(
                     symbol=symbol,
                     tf=tf,
-                    ts_close=int(row[0]),
+                    ts_close=_normalize_timestamp(int(row[0]), tf_seconds),
                     o=float(row[1]),
                     h=float(row[2]),
                     l=float(row[3]),
@@ -71,7 +78,7 @@ def fetch_candles(ccxt_client, symbol: str, tf: str, n: int = 300) -> List[Candl
 
 def ingest_cycle(ccxt_client, store: StateStore, symbol: str, tf: str) -> List[Candle]:
     """Fetch and persist the most recent closed candles."""
-    tf_seconds = _timeframe_to_seconds(tf)
+    tf_seconds = timeframe_to_seconds(tf)
     candles = fetch_candles(ccxt_client, symbol, tf)
     candles = sorted(candles, key=lambda c: c.ts_close)
     if not candles:
@@ -88,4 +95,4 @@ def ingest_cycle(ccxt_client, store: StateStore, symbol: str, tf: str) -> List[C
     return latest
 
 
-__all__ = ["fetch_candles", "ingest_cycle"]
+__all__ = ["TIMEFRAME_TO_SECONDS", "fetch_candles", "ingest_cycle", "timeframe_to_seconds"]
