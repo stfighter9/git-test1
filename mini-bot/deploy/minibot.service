@@ -1,0 +1,22 @@
+[Unit]
+Description=MiniBot H4 single cycle
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+EnvironmentFile=-/opt/minibot/.env
+WorkingDirectory=/opt/minibot
+ExecStart=/opt/minibot/.venv/bin/python -m bot.run_cycle
+Environment=PYTHONUNBUFFERED=1
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=minibot
+NoNewPrivileges=true
+ProtectSystem=full
+ProtectHome=true
+PrivateTmp=true
+ReadWritePaths=/opt/minibot /var/tmp
+
+[Install]
+WantedBy=multi-user.target

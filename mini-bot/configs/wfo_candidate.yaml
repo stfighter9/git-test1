@@ -1,0 +1,78 @@
+wfo:
+  n_folds: 4
+  train_months: 18
+  test_months: 6
+  step_months: 3
+  timeframe: "4h"
+  symbols:
+    - "BTC/USDT:USDT"
+    - "ETH/USDT:USDT"
+  min_candles: 2000
+  seed: 42
+
+data:
+  venue: "binanceusdm"
+  testnet: true
+  fetch_limit: 1000
+  cache_dir: "data/cache"
+
+labeling:
+  type: "triple_barrier"
+  horizon_bars: 2
+  k_tp: 3.5
+  k_sl: 2.5
+  use_close: true
+
+calibration:
+  enabled: true
+  method: "isotonic"
+  holdout_pct: 0.2
+
+regime:
+  adx_min: 25
+  atr_pct_min: 0.015
+  atr_pct_max: 0.07
+
+execution_sim:
+  post_only: true
+  ladder_levels: 3
+  order_ttl_bars: 2
+  fee_bp: 2
+  slip_bp: 2
+  maker_ratio_floor: 0.55
+
+risk:
+  leverage: 3
+  risk_pct: 0.01
+  daily_loss_limit_pct: 0.03
+  max_positions: 1
+  funding_awareness: true
+  funding_extreme_annualized: 0.8
+
+model:
+  type: "lightgbm"
+  tau: 0.65
+  features:
+    - atr
+    - adx
+    - ret
+    - vol
+
+report:
+  out_dir: "experiments/wfo_candidate"
+  write_trades_csv: true
+  write_cycles_jsonl: true
+  plots:
+    reliability: true
+    equity_curve: true
+    rolling_sharpe: true
+
+dod:
+  sharpe_min: 1.0
+  mar_min: 0.6
+  max_dd_pct: 0.15
+  maker_ratio_min: 0.55
+  funding_pnl_erosion_max: 0.2
+  pairs_required:
+    - "BTC/USDT:USDT"
+    - "ETH/USDT:USDT"
