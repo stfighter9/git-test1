@@ -50,7 +50,7 @@ def _parse_scalar(value: str) -> Any:
     if value.lower() in {"true", "false"}:
         return value.lower() == "true"
     try:
-        if "." in value:
+        if any(ch in value for ch in ".eE"):
             return float(value)
         return int(value)
     except ValueError:
@@ -61,6 +61,8 @@ def _load_yaml(text: str) -> Optional[Dict[str, Any]]:
     if yaml is not None:
         return yaml.safe_load(text) or {}
 
+    # NOTE: Fallback parser only supports flat key/value mappings and simple
+    # nesting. Install PyYAML to work with lists or more complex structures.
     lines = text.splitlines()
     root: Dict[str, Any] = {}
     stack: list[tuple[int, Dict[str, Any]]] = [(-1, root)]
@@ -86,7 +88,7 @@ def _load_yaml(text: str) -> Optional[Dict[str, Any]]:
 @dataclass
 class OrderConfig:
     ladder_levels: int = 3
-    timeout_bars: int = 1
+    timeout_bars: int = 2
     post_only: bool = True
 
 
@@ -95,6 +97,18 @@ class ATRConfig:
     window: int = 14
     k_sl: float = 2.5
     k_tp: float = 3.5
+
+
+@dataclass
+class RegimeConfig:
+    adx_min: float = 25.0
+    atr_pct_min: float = 0.2
+    atr_pct_max: float = 0.8
+
+
+@dataclass
+class FundingConfig:
+    extreme_annualized: float = 0.8
 
 
 @dataclass
@@ -115,12 +129,17 @@ class TradingConfig:
     order: OrderConfig = field(default_factory=OrderConfig)
     venue: VenueConfig = field(default_factory=VenueConfig)
     tau: float = DEFAULT_TAU
+    fee_bp: float = 2.0
+    slip_bp: float = 2.0
+    regime: RegimeConfig = field(default_factory=RegimeConfig)
+    funding: FundingConfig = field(default_factory=FundingConfig)
 
 
 @dataclass
 class TelegramConfig:
     enabled: bool = True
     chat_id: Optional[int] = None
+    fail_freeze_threshold: int = 3
 
 
 @dataclass
@@ -162,23 +181,32 @@ def load_config(
             cur = cur[part]
         return cur
 
+    default_trading = TradingConfig()
+    default_atr = ATRConfig()
+    default_order = OrderConfig()
+    default_regime = RegimeConfig()
+    default_funding = FundingConfig()
+    default_venue = VenueConfig()
+
     trading = TradingConfig(
         timeframe=overrides.get(
-            "trading.timeframe", env_data.get("TIMEFRAME", _deep_get(yaml_data, "trading.timeframe", TradingConfig.timeframe))
+            "trading.timeframe",
+            env_data.get("TIMEFRAME", _deep_get(yaml_data, "trading.timeframe", default_trading.timeframe)),
         ),
         symbol=overrides.get(
-            "trading.symbol", env_data.get("SYMBOL", _deep_get(yaml_data, "trading.symbol", TradingConfig.symbol))
+            "trading.symbol",
+            env_data.get("SYMBOL", _deep_get(yaml_data, "trading.symbol", default_trading.symbol)),
         ),
         leverage=float(
             overrides.get(
                 "trading.leverage",
-                env_data.get("LEVERAGE", _deep_get(yaml_data, "trading.leverage", TradingConfig.leverage)),
+                env_data.get("LEVERAGE", _deep_get(yaml_data, "trading.leverage", default_trading.leverage)),
             )
         ),
         risk_pct=float(
             overrides.get(
                 "trading.risk_pct",
-                env_data.get("RISK_PCT", _deep_get(yaml_data, "trading.risk_pct", TradingConfig.risk_pct)),
+                env_data.get("RISK_PCT", _deep_get(yaml_data, "trading.risk_pct", default_trading.risk_pct)),
             )
         ),
         daily_loss_limit_pct=float(
@@ -186,33 +214,41 @@ def load_config(
                 "trading.daily_loss_limit_pct",
                 env_data.get(
                     "DAILY_LOSS_LIMIT_PCT",
-                    _deep_get(yaml_data, "trading.daily_loss_limit_pct", TradingConfig.daily_loss_limit_pct),
+                    _deep_get(
+                        yaml_data,
+                        "trading.daily_loss_limit_pct",
+                        default_trading.daily_loss_limit_pct,
+                    ),
                 ),
             )
         ),
         max_positions=int(
             overrides.get(
                 "trading.max_positions",
-                env_data.get("MAX_POSITIONS", _deep_get(yaml_data, "trading.max_positions", TradingConfig.max_positions)),
+                env_data.get(
+                    "MAX_POSITIONS", _deep_get(yaml_data, "trading.max_positions", default_trading.max_positions)
+                ),
             )
         ),
         atr=ATRConfig(
             window=int(
                 overrides.get(
                     "trading.atr.window",
-                    env_data.get("ATR_WINDOW", _deep_get(yaml_data, "trading.atr.window", TradingConfig.atr.window)),
+                    env_data.get(
+                        "ATR_WINDOW", _deep_get(yaml_data, "trading.atr.window", default_atr.window)
+                    ),
                 )
             ),
             k_sl=float(
                 overrides.get(
                     "trading.atr.k_sl",
-                    env_data.get("ATR_K_SL", _deep_get(yaml_data, "trading.atr.k_sl", TradingConfig.atr.k_sl)),
+                    env_data.get("ATR_K_SL", _deep_get(yaml_data, "trading.atr.k_sl", default_atr.k_sl)),
                 )
             ),
             k_tp=float(
                 overrides.get(
                     "trading.atr.k_tp",
-                    env_data.get("ATR_K_TP", _deep_get(yaml_data, "trading.atr.k_tp", TradingConfig.atr.k_tp)),
+                    env_data.get("ATR_K_TP", _deep_get(yaml_data, "trading.atr.k_tp", default_atr.k_tp)),
                 )
             ),
         ),
@@ -222,7 +258,7 @@ def load_config(
                     "trading.order.ladder_levels",
                     env_data.get(
                         "ORDER_LADDER_LEVELS",
-                        _deep_get(yaml_data, "trading.order.ladder_levels", TradingConfig.order.ladder_levels),
+                        _deep_get(yaml_data, "trading.order.ladder_levels", default_order.ladder_levels),
                     ),
                 )
             ),
@@ -231,7 +267,7 @@ def load_config(
                     "trading.order.timeout_bars",
                     env_data.get(
                         "ORDER_TIMEOUT_BARS",
-                        _deep_get(yaml_data, "trading.order.timeout_bars", TradingConfig.order.timeout_bars),
+                        _deep_get(yaml_data, "trading.order.timeout_bars", default_order.timeout_bars),
                     ),
                 )
             ),
@@ -249,7 +285,7 @@ def load_config(
         venue=VenueConfig(
             name=overrides.get(
                 "trading.venue.name",
-                env_data.get("EXCHANGE", _deep_get(yaml_data, "trading.venue.name", TradingConfig.venue.name)),
+                env_data.get("EXCHANGE", _deep_get(yaml_data, "trading.venue.name", default_venue.name)),
             ),
             testnet=_parse_bool(
                 overrides.get(
@@ -265,7 +301,59 @@ def load_config(
         tau=float(
             overrides.get(
                 "trading.tau",
-                env_data.get("TAU", _deep_get(yaml_data, "trading.tau", TradingConfig.tau)),
+                env_data.get("TAU", _deep_get(yaml_data, "trading.tau", default_trading.tau)),
+            )
+        ),
+        fee_bp=float(
+            overrides.get(
+                "trading.fee_bp",
+                env_data.get("FEE_BP", _deep_get(yaml_data, "trading.fee_bp", default_trading.fee_bp)),
+            )
+        ),
+        slip_bp=float(
+            overrides.get(
+                "trading.slip_bp",
+                env_data.get("SLIP_BP", _deep_get(yaml_data, "trading.slip_bp", default_trading.slip_bp)),
+            )
+        ),
+        regime=RegimeConfig(
+            adx_min=float(
+                overrides.get(
+                    "trading.regime.adx_min",
+                    _deep_get(yaml_data, "trading.regime.adx_min", default_regime.adx_min),
+                )
+            ),
+            atr_pct_min=float(
+                overrides.get(
+                    "trading.regime.atr_pct_min",
+                    _deep_get(
+                        yaml_data,
+                        "trading.regime.atr_pct_min",
+                        default_regime.atr_pct_min,
+                    ),
+                )
+            ),
+            atr_pct_max=float(
+                overrides.get(
+                    "trading.regime.atr_pct_max",
+                    _deep_get(
+                        yaml_data,
+                        "trading.regime.atr_pct_max",
+                        default_regime.atr_pct_max,
+                    ),
+                )
+            ),
+        ),
+        funding=FundingConfig(
+            extreme_annualized=float(
+                overrides.get(
+                    "trading.funding.extreme_annualized",
+                    _deep_get(
+                        yaml_data,
+                        "trading.funding.extreme_annualized",
+                        default_funding.extreme_annualized,
+                    ),
+                )
             )
         ),
     )
@@ -298,6 +386,16 @@ def load_config(
                 TelegramConfig().enabled,
             ),
             chat_id=telegram_chat_id,
+            fail_freeze_threshold=int(
+                overrides.get(
+                    "monitoring.telegram.fail_freeze_threshold",
+                    _deep_get(
+                        yaml_data,
+                        "monitoring.telegram.fail_freeze_threshold",
+                        TelegramConfig().fail_freeze_threshold,
+                    ),
+                )
+            ),
         )
     )
 
@@ -308,8 +406,10 @@ __all__ = [
     "ATRConfig",
     "Config",
     "DEFAULT_TAU",
+    "FundingConfig",
     "MonitoringConfig",
     "OrderConfig",
+    "RegimeConfig",
     "TelegramConfig",
     "TradingConfig",
     "VenueConfig",

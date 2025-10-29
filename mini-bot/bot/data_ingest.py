@@ -3,7 +3,6 @@ from __future__ import annotations
 
 import logging
 import time
-from typing import List
 
 from bot.state_store import Candle, StateStore
 
@@ -33,39 +32,64 @@ def timeframe_to_seconds(tf: str) -> int:
 
 
 def _normalize_timestamp(ts_ms: int, tf_seconds: int) -> int:
+    """Normalize a timestamp down to the open time of its candle."""
+
     step_ms = tf_seconds * 1000
     if step_ms <= 0:
         return ts_ms
     return (ts_ms // step_ms) * step_ms
 
 
-def _filter_closed_candles(candles: List[List[float]], tf_seconds: int) -> List[List[float]]:
-    cutoff_ms = int(time.time() * 1000) - tf_seconds * 1000
-    return [c for c in candles if int(c[0]) <= cutoff_ms]
+def _filter_closed_candles(
+    candles: list[list[float]], tf_seconds: int, *, now_ms: int | None = None
+) -> list[list[float]]:
+    """Return only candles whose close timestamp is in the past."""
+
+    if now_ms is None:
+        now_ms = int(time.time() * 1000)
+    step_ms = tf_seconds * 1000
+    return [c for c in candles if int(c[0]) + step_ms <= now_ms]
 
 
-def fetch_candles(ccxt_client, symbol: str, tf: str, n: int = 300) -> List[Candle]:
+def fetch_candles(
+    ccxt_client,
+    symbol: str,
+    tf: str,
+    n: int = 300,
+    *,
+    since: int | None = None,
+) -> list[Candle]:
     """Fetch closed candles from the exchange."""
     tf_seconds = timeframe_to_seconds(tf)
+    step_ms = tf_seconds * 1000
     attempt = 0
     last_error: Exception | None = None
     while attempt < 3:
         try:
-            raw = ccxt_client.fetch_ohlcv(symbol, timeframe=tf, limit=n)
-            closed = _filter_closed_candles(raw, tf_seconds)
-            candles = [
-                Candle(
-                    symbol=symbol,
-                    tf=tf,
-                    ts_close=_normalize_timestamp(int(row[0]), tf_seconds),
-                    o=float(row[1]),
-                    h=float(row[2]),
-                    l=float(row[3]),
-                    c=float(row[4]),
-                    v=float(row[5]),
+            kwargs = {"timeframe": tf, "limit": n}
+            if since is not None:
+                kwargs["since"] = int(since)
+            raw = ccxt_client.fetch_ohlcv(symbol, **kwargs)
+            now_ms = int(time.time() * 1000)
+            closed = _filter_closed_candles(raw, tf_seconds, now_ms=now_ms)
+            candles: list[Candle] = []
+            for row in closed:
+                ts_open = _normalize_timestamp(int(row[0]), tf_seconds)
+                ts_close = ts_open + step_ms
+                vol_raw = row[5] if len(row) > 5 else 0.0
+                volume = float(vol_raw) if vol_raw not in (None, "") else 0.0
+                candles.append(
+                    Candle(
+                        symbol=symbol,
+                        tf=tf,
+                        ts_close=ts_close,
+                        o=float(row[1]),
+                        h=float(row[2]),
+                        l=float(row[3]),
+                        c=float(row[4]),
+                        v=volume,
+                    )
                 )
-                for row in closed
-            ]
             return candles
         except Exception as exc:  # pragma: no cover - defensive log
             last_error = exc
@@ -76,22 +100,36 @@ def fetch_candles(ccxt_client, symbol: str, tf: str, n: int = 300) -> List[Candl
     raise RuntimeError("fetch_candles failed") from last_error
 
 
-def ingest_cycle(ccxt_client, store: StateStore, symbol: str, tf: str) -> List[Candle]:
+def ingest_cycle(ccxt_client, store: StateStore, symbol: str, tf: str) -> list[Candle]:
     """Fetch and persist the most recent closed candles."""
     tf_seconds = timeframe_to_seconds(tf)
-    candles = fetch_candles(ccxt_client, symbol, tf)
+    step_ms = tf_seconds * 1000
+    last = store.get_last_n_candles(symbol, tf, 1)
+    since: int | None = None
+    if last:
+        last_close = last[0].ts_close
+        since = max(0, last_close - step_ms)
+    candles = fetch_candles(ccxt_client, symbol, tf, since=since)
     candles = sorted(candles, key=lambda c: c.ts_close)
     if not candles:
         LOGGER.warning("No candles fetched for symbol=%s tf=%s", symbol, tf)
         return []
 
-    cutoff_ms = int(time.time() * 1000) - tf_seconds * 1000
+    cutoff_ms = int(time.time() * 1000) - step_ms
     closed = [c for c in candles if c.ts_close <= cutoff_ms]
     if len(closed) < 3:
         LOGGER.warning("Missing candles for symbol=%s tf=%s count=%s", symbol, tf, len(closed))
     latest = closed[-3:]
 
     store.upsert_candles(closed)
+    LOGGER.info(
+        "Ingested %s closed candles (%s..%s) for %s %s",
+        len(closed),
+        closed[0].ts_close if closed else None,
+        closed[-1].ts_close if closed else None,
+        symbol,
+        tf,
+    )
     return latest
 
 

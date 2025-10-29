@@ -32,6 +32,14 @@ class TelegramNotifier:
     def is_frozen(self) -> bool:
         return self.freeze_path.exists()
 
+    @property
+    def failure_streak(self) -> int:
+        return self._failures
+
+    @property
+    def max_failures_allowed(self) -> int:
+        return self.max_failures
+
     def send_message(self, text: str) -> bool:
         if not self.token or not self.chat_id:
             LOGGER.warning("Telegram not configured; skipping message")

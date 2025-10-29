@@ -11,12 +11,22 @@ trading:
     k_tp: 3.5
   order:
     ladder_levels: 3
-    timeout_bars: 1
+    timeout_bars: 2
     post_only: true
   venue:
-    name: binance
+    name: binanceusdm
     testnet: true
+  tau: 0.65
+  fee_bp: 2
+  slip_bp: 2
+  regime:
+    adx_min: 25
+    atr_pct_min: 0.015
+    atr_pct_max: 0.07
+  funding:
+    extreme_annualized: 0.8
 monitoring:
   telegram:
-    enabled: true
+    enabled: false
     chat_id: 123456
+    fail_freeze_threshold: 3

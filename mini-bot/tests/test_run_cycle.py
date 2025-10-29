@@ -3,7 +3,11 @@ from __future__ import annotations
 import csv
 from pathlib import Path
 
+import csv
+from pathlib import Path
+
 from bot.config import TradingConfig
+from bot.data_ingest import timeframe_to_seconds
 from bot.notifier import TelegramNotifier
 from bot.run_cycle import run_once
 from bot.state_store import Position, StateStore
@@ -25,14 +29,19 @@ class DummyClient:
         self.margin_mode_calls = []
         self.leverage_calls = []
 
-    def fetch_ohlcv(self, symbol, timeframe, limit):
+    def market(self, symbol):
+        return self.markets.get(symbol, {})
+
+    def fetch_ohlcv(self, symbol, timeframe, limit=None, since=None):
         rows = []
+        tf_ms = timeframe_to_seconds(timeframe) * 1000
         with FIXTURE_PATH.open() as f:
             reader = csv.DictReader(f)
             for row in reader:
+                ts_close = int(row["ts_close"])
                 rows.append(
                     [
-                        int(row["ts_close"]),
+                        ts_close - tf_ms,
                         float(row["open"]),
                         float(row["high"]),
                         float(row["low"]),
@@ -47,7 +56,11 @@ class DummyClient:
         if price is None:
             stop_price = kwargs.get("params", {}).get("stopPrice", 0.0)
             price = stop_price
-        return {"id": f"order-{float(price):.2f}", "status": kwargs.get("status", "open")}
+        return {
+            "id": f"order-{float(price):.2f}",
+            "status": kwargs.get("status", "open"),
+            "filled": kwargs.get("amount", 0),
+        }
 
     def cancel_order(self, oid, symbol=None):
         self.cancelled.append((oid, symbol))
@@ -58,6 +71,9 @@ class DummyClient:
     def set_leverage(self, leverage, symbol):
         self.leverage_calls.append((leverage, symbol))
 
+    def fetch_funding_rate(self, symbol):
+        return {"fundingRate": 0.0}
+
 
 class DummyInferer:
     def predict_proba(self, feature_row):
@@ -66,8 +82,16 @@ class DummyInferer:
 
 def test_run_once_places_orders(tmp_path: Path) -> None:
     cfg = TradingConfig()
+    cfg.regime.adx_min = 0
+    cfg.regime.atr_pct_min = 0
+    cfg.regime.atr_pct_max = 10
     client = DummyClient()
-    notifier = TelegramNotifier(None, None, freeze_path=tmp_path / "notify.freeze")
+    notifier = TelegramNotifier(
+        None,
+        None,
+        freeze_path=tmp_path / "notify.freeze",
+        max_failures=3,
+    )
     inferer = DummyInferer()
     with StateStore(tmp_path / "test.db") as store:
         result = run_once(
@@ -86,8 +110,16 @@ def test_run_once_places_orders(tmp_path: Path) -> None:
 
 def test_run_once_respects_max_position(tmp_path: Path) -> None:
     cfg = TradingConfig()
+    cfg.regime.adx_min = 0
+    cfg.regime.atr_pct_min = 0
+    cfg.regime.atr_pct_max = 10
     client = DummyClient()
-    notifier = TelegramNotifier(None, None, freeze_path=tmp_path / "notify.freeze")
+    notifier = TelegramNotifier(
+        None,
+        None,
+        freeze_path=tmp_path / "notify.freeze",
+        max_failures=3,
+    )
     inferer = DummyInferer()
     with StateStore(tmp_path / "test.db") as store:
         store.set_position(

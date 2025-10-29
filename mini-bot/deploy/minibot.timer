@@ -1,8 +1,9 @@
 [Unit]
-Description=Run MiniBot every 4h on the hour UTC
+Description=Run MiniBot cycle every 4 hours
 
 [Timer]
-OnCalendar=0/4:00:00
+OnBootSec=5min
+OnUnitActiveSec=4h
 Persistent=true
 
 [Install]
